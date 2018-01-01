@@ -21,11 +21,10 @@ repositories {
 }
 
 dependencies {
-    compile fileTree(dir: 'libs', include: '*.jar')
+    compile 'org.apache.lucene:lucene-queryparser:7.2.0'
+    compile 'org.apache.lucene:lucene-analyzers-smartcn:7.2.0'
     compile 'org.apache.poi:poi-ooxml:3.17'
     compile 'org.apache.poi:poi-scratchpad:3.17'
-    compile 'org.jetbrains.kotlin:kotlin-stdlib'
-    compile 'org.jetbrains.kotlin:kotlin-stdlib-jdk8'
     compile 'no.tornado:tornadofx:1.7.14'
     compile 'de.jensd:fontawesomefx:8.9'
     compile 'org.controlsfx:controlsfx:8.40.10'
