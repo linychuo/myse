@@ -1,24 +1,29 @@
 import com.ibm.icu.text.CharsetDetector
-import org.apache.commons.io.IOUtils
 import org.apache.lucene.analysis.cn.smart.SmartChineseAnalyzer
 import org.apache.lucene.document.*
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.index.IndexWriterConfig
 import org.apache.lucene.store.FSDirectory
+import org.apache.pdfbox.pdmodel.PDDocument
+import org.apache.pdfbox.text.PDFTextStripper
 import org.apache.poi.hwpf.extractor.WordExtractor
 import org.apache.poi.poifs.filesystem.FileMagic
+import org.apache.poi.xwpf.extractor.XWPFWordExtractor
 import org.apache.poi.xwpf.usermodel.XWPFDocument
-import java.io.StringWriter
+import java.io.File
 import java.nio.file.*
 import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.DosFileAttributes
 import java.util.*
-import org.apache.poi.xwpf.extractor.XWPFWordExtractor
 
-
-val fileExt = arrayOf("txt", "html", "htm", "doc", "docx")
+val plainText = arrayOf("txt", "TXT")
+val html = arrayOf("html", "htm", "html", "htm")
+val richContent = arrayOf("pdf", "doc", "docx")
+val allExt = plainText + html + richContent
+var cnt = 0
 
 fun main(args: Array<String>) {
-    val rootDir = Paths.get("d:/workspace")
+    val rootDir = Paths.get("d:/")
     val start = Date()
     val dir = FSDirectory.open(Paths.get("index"))
     val analyzer = SmartChineseAnalyzer()
@@ -26,69 +31,89 @@ fun main(args: Array<String>) {
 
     iwc.openMode = IndexWriterConfig.OpenMode.CREATE
     IndexWriter(dir, iwc).use { writer ->
-        indexDocs(writer, rootDir)
+        indexDocs1(writer, rootDir)
     }
 
     val end = Date()
-    println("${end.time - start.time} total milliseconds")
+    println("${end.time - start.time} total milliseconds, $cnt files")
 }
 
 
-private fun indexDocs(writer: IndexWriter, path: Path) {
-    if (Files.isDirectory(path)) {
-        Files.walkFileTree(path, object : SimpleFileVisitor<Path>() {
+private fun indexDocs(writer: IndexWriter, root: Path) {
+    root.toFile().walkTopDown().onEnter {
+        if (it.toPath() == root) {
+            true
+        } else {
+            val dfa = Files.readAttributes(it.toPath(), DosFileAttributes::class.java)
+            !dfa.isHidden && !dfa.isSystem
+        }
+    }.forEach {
+        if (it.extension in allExt) {
+            indexDoc(writer, it, it.lastModified())
+        }
+    }
+}
+
+private fun indexDocs1(writer: IndexWriter, root: Path) {
+    try {
+        Files.walkFileTree(root, object : SimpleFileVisitor<Path>() {
             override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
-                indexDoc(writer, file, attrs.lastModifiedTime().toMillis())
+                indexDoc(writer, file.toFile(), attrs.lastModifiedTime().toMillis())
                 return FileVisitResult.CONTINUE
             }
 
             override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
-                if (!Files.isHidden(dir) && Files.isReadable(dir)) return super.preVisitDirectory(dir, attrs)
-                return FileVisitResult.SKIP_SUBTREE
+                return if (dir == root) {
+                    FileVisitResult.CONTINUE
+                } else {
+                    val dfa = Files.readAttributes(dir, DosFileAttributes::class.java)
+                    if (!dfa.isHidden && !dfa.isSystem) {
+                        FileVisitResult.CONTINUE
+                    } else {
+                        FileVisitResult.SKIP_SUBTREE
+                    }
+                }
             }
         })
-    } else {
-        indexDoc(writer, path, Files.getLastModifiedTime(path).toMillis())
+    } catch (e: AccessDeniedException) {
+        //ignore
     }
 }
 
 
-private fun indexDoc(writer: IndexWriter, file: Path, lastModified: Long) {
-    if (fileExt.indexOf(file.toFile().extension) != -1) {
-        val doc = Document()
-        doc.add(StringField("path", file.toString(), Field.Store.YES))
-        doc.add(LongPoint("modified", lastModified))
-        doc.add(TextField("contents", content(file), Field.Store.YES))
-        println("adding $file")
-        writer.addDocument(doc)
-    }
+private fun indexDoc(writer: IndexWriter, file: File, lastModified: Long) {
+    val doc = Document()
+    doc.add(StringField("path", file.toString(), Field.Store.YES))
+    doc.add(LongPoint("modified", lastModified))
+    doc.add(TextField("contents", content(file), Field.Store.YES))
+    println("adding $file")
+    writer.addDocument(doc)
 }
 
-private fun content(file: Path): String {
-    FileMagic.prepareToCheckMagic(file.toFile().inputStream()).use {
-        val magic = FileMagic.valueOf(it)
-        when (magic) {
-            FileMagic.OLE2 -> {
-                val extractor = WordExtractor(it)
-                return extractor.paragraphText.joinToString("")
-            }
-            FileMagic.OOXML -> {
-                val word = XWPFDocument(it)
-                val extractor = XWPFWordExtractor(word)
-                return extractor.text
-            }
-            else -> {
+private fun content(f: File): String {
+    f.inputStream().use { fis ->
+        return when (f.extension) {
+            in plainText -> {
                 val detector = CharsetDetector()
                 var encoding = "gbk"
-                val match = detector.setText(it).detect()
+                val bytes = fis.readBytes()
+                val match = detector.setText(bytes).detect()
                 if (match.confidence > 50) {
                     encoding = match.name
                 }
-                val sw = StringWriter()
-                IOUtils.copy(it, sw, encoding)
-                return sw.toString()
+                java.lang.String(bytes, encoding) as String
             }
+            in richContent -> {
+                FileMagic.prepareToCheckMagic(fis).use {
+                    when (FileMagic.valueOf(it)) {
+                        FileMagic.OLE2 -> WordExtractor(it).paragraphText.joinToString("")
+                        FileMagic.OOXML -> XWPFWordExtractor(XWPFDocument(it)).text
+                        FileMagic.PDF -> PDFTextStripper().getText(PDDocument.load(it))
+                        else -> it.reader().readText()
+                    }
+                }
+            }
+            else -> fis.reader().readText()
         }
     }
-
 }
