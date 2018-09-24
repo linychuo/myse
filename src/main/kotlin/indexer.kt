@@ -11,6 +11,7 @@ import org.apache.poi.poifs.filesystem.FileMagic
 import org.apache.poi.xwpf.extractor.XWPFWordExtractor
 import org.apache.poi.xwpf.usermodel.XWPFDocument
 import java.io.File
+import java.io.IOException
 import java.nio.file.*
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.DosFileAttributes
@@ -25,13 +26,13 @@ var cnt = 0
 fun main(args: Array<String>) {
     val rootDir = Paths.get("d:/")
     val start = Date()
-    val dir = FSDirectory.open(Paths.get("index"))
+    val indexDir = FSDirectory.open(Paths.get("index"))
     val analyzer = SmartChineseAnalyzer()
     val iwc = IndexWriterConfig(analyzer)
 
     iwc.openMode = IndexWriterConfig.OpenMode.CREATE
-    IndexWriter(dir, iwc).use { writer ->
-        indexDocs1(writer, rootDir)
+    IndexWriter(indexDir, iwc).use { writer ->
+        indexDocs(writer, rootDir)
     }
 
     val end = Date()
@@ -40,44 +41,32 @@ fun main(args: Array<String>) {
 
 
 private fun indexDocs(writer: IndexWriter, root: Path) {
-    root.toFile().walkTopDown().onEnter {
-        if (it.toPath() == root) {
-            true
-        } else {
-            val dfa = Files.readAttributes(it.toPath(), DosFileAttributes::class.java)
-            !dfa.isHidden && !dfa.isSystem
-        }
-    }.forEach {
-        if (it.extension in allExt) {
-            indexDoc(writer, it, it.lastModified())
-        }
-    }
-}
-
-private fun indexDocs1(writer: IndexWriter, root: Path) {
-    try {
-        Files.walkFileTree(root, object : SimpleFileVisitor<Path>() {
-            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+    Files.walkFileTree(root, object : SimpleFileVisitor<Path>() {
+        override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+            if (file.toFile().extension in allExt) {
+                cnt++
                 indexDoc(writer, file.toFile(), attrs.lastModifiedTime().toMillis())
-                return FileVisitResult.CONTINUE
             }
+            return FileVisitResult.CONTINUE
+        }
 
-            override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
-                return if (dir == root) {
+        override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+            return if (dir == root) {
+                FileVisitResult.CONTINUE
+            } else {
+                val dfa = Files.readAttributes(dir, DosFileAttributes::class.java)
+                if (!dfa.isHidden && !dfa.isSystem) {
                     FileVisitResult.CONTINUE
                 } else {
-                    val dfa = Files.readAttributes(dir, DosFileAttributes::class.java)
-                    if (!dfa.isHidden && !dfa.isSystem) {
-                        FileVisitResult.CONTINUE
-                    } else {
-                        FileVisitResult.SKIP_SUBTREE
-                    }
+                    FileVisitResult.SKIP_SUBTREE
                 }
             }
-        })
-    } catch (e: AccessDeniedException) {
-        //ignore
-    }
+        }
+
+        override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
+            return FileVisitResult.CONTINUE
+        }
+    })
 }
 
 
